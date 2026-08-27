@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Video Player Pro — 재생 + 자르기</title>
+<title>Multi Player — 재생 + 자르기</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <meta name="theme-color" content="#0b0b0e">
@@ -340,7 +340,7 @@ html,body {
 
 /* ── 재생목록 패널 ── */
 #pl-panel {
-  position:absolute; top:0; right:0; bottom:0;
+  position:absolute; top:0; right:0; bottom:76px;
   width:280px; max-width:82vw;
   background:rgba(11,11,15,0.97); border-left:1px solid var(--border);
   z-index:60; display:none; flex-direction:column;
@@ -882,7 +882,7 @@ html,body {
       <div class="hk-row"><div class="hk-keys"><span class="hk-key">J</span><span class="hk-key">L</span></div><span class="hk-desc">5초 뒤로 / 앞으로</span></div>
     </div>
     <button class="hk-close" onclick="toggleHK()">닫기</button>
-    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);text-align:center">Video Player Pro — 재생 + 자르기 통합판 · 제작 심상현</div>
+    <div style="margin-top:14px;padding-top:10px;border-top:1px solid var(--border);font-size:10px;color:var(--muted);text-align:center">Multi Player — 재생 + 자르기 통합판 · 제작 심상현</div>
   </div>
 </div>
 
@@ -1093,7 +1093,7 @@ function loadFile(file, subFile) {
   video.load(); video.play();
   dropzone.classList.add('hidden');
   titleBar.textContent = file.name;
-  document.title = file.name + ' — Video Player Pro';
+  document.title = file.name + ' — Multi Player';
   // 이전 자막 초기화
   subtitles = [];
   subEl.textContent = '';

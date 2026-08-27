@@ -1,6 +1,6 @@
 {
-  "name": "Video Player Pro",
-  "short_name": "VPlayer Pro",
+  "name": "Multi Player",
+  "short_name": "Multi Player",
   "description": "재생 + 자르기 통합 비디오/오디오(MP3) 플레이어 · 재생목록 · 이퀄라이저 (재인코딩 없음) · 심상현",
   "id": "/index.html",
   "start_url": "./index.html",
