@@ -1251,6 +1251,30 @@ const EQ_PRESETS = {
 let audioCtx = null, eqSource = null, eqFilters = [], eqGain = null;
 let eqEnabled = true;
 let eqBandValues = EQ_BANDS.map(() => 0);
+let eqLastPreset = '';
+
+// 이퀄라이저 설정을 브라우저에 저장 → 다음에 열어도 그대로 적용됨
+const EQ_STORAGE_KEY = 'mp_eq_settings_v1';
+function saveEqSettings() {
+  try {
+    localStorage.setItem(EQ_STORAGE_KEY, JSON.stringify({
+      bands: eqBandValues, enabled: eqEnabled, preset: eqLastPreset
+    }));
+  } catch (e) { /* 저장 실패해도 재생에는 지장 없음 */ }
+}
+function loadEqSettings() {
+  try {
+    const raw = localStorage.getItem(EQ_STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (Array.isArray(data.bands) && data.bands.length === EQ_BANDS.length) {
+      eqBandValues = data.bands.map(Number);
+    }
+    if (typeof data.enabled === 'boolean') eqEnabled = data.enabled;
+    if (typeof data.preset === 'string') eqLastPreset = data.preset;
+  } catch (e) { /* 손상된 데이터는 무시 */ }
+}
+loadEqSettings(); // 페이지 로드 시 이전에 저장한 이퀄라이저 값 복원
 
 // video 엘리먼트를 Web Audio 그래프에 연결 (최초 1회만 가능 — play 이벤트 또는 패널 오픈 시 lazy 초기화)
 function ensureAudioGraph() {
@@ -1261,12 +1285,12 @@ function ensureAudioGraph() {
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     eqSource = audioCtx.createMediaElementSource(video);
-    eqFilters = EQ_BANDS.map(freq => {
+    eqFilters = EQ_BANDS.map((freq, i) => {
       const f = audioCtx.createBiquadFilter();
       f.type = 'peaking';
       f.frequency.value = freq;
       f.Q.value = 1.2;
-      f.gain.value = 0;
+      f.gain.value = eqEnabled ? eqBandValues[i] : 0; // 저장된 값으로 즉시 복원
       return f;
     });
     eqGain = audioCtx.createGain();
@@ -1282,35 +1306,50 @@ function ensureAudioGraph() {
   }
 }
 
-// 이퀄라이저 패널 슬라이더/프리셋 UI 최초 1회 생성
+// 이퀄라이저 패널 슬라이더/프리셋 UI 최초 1회 생성 (저장된 값 반영)
 function buildEqUI() {
   const bandsEl = document.getElementById('eq-bands');
-  if (bandsEl.dataset.built) return;
-  bandsEl.innerHTML = EQ_BANDS.map((freq, i) => `
-    <div class="eq-band">
-      <div class="eq-band-val" id="eq-val-${i}">0</div>
-      <div class="eq-band-slider-wrap">
-        <input type="range" id="eq-sl-${i}" min="-12" max="12" step="1" value="0"
-          oninput="setBand(${i}, this.value)">
+  if (!bandsEl.dataset.built) {
+    bandsEl.innerHTML = EQ_BANDS.map((freq, i) => `
+      <div class="eq-band">
+        <div class="eq-band-val" id="eq-val-${i}">0</div>
+        <div class="eq-band-slider-wrap">
+          <input type="range" id="eq-sl-${i}" min="-12" max="12" step="1" value="0"
+            oninput="setBand(${i}, this.value)">
+        </div>
+        <div class="eq-band-freq">${freq >= 1000 ? (freq/1000)+'k' : freq}</div>
       </div>
-      <div class="eq-band-freq">${freq >= 1000 ? (freq/1000)+'k' : freq}</div>
-    </div>
-  `).join('');
-  bandsEl.dataset.built = '1';
+    `).join('');
+    bandsEl.dataset.built = '1';
 
+    const sel = document.getElementById('eq-preset-sel');
+    sel.innerHTML = '<option value="">프리셋 선택…</option>' +
+      Object.keys(EQ_PRESETS).map(name => `<option value="${name}">${name}</option>`).join('');
+  }
+  // 저장돼 있던 밴드 값/프리셋/on-off 상태를 화면에 반영
+  eqBandValues.forEach((v, i) => {
+    const sl = document.getElementById('eq-sl-' + i);
+    const valEl = document.getElementById('eq-val-' + i);
+    if (sl) sl.value = v;
+    if (valEl) valEl.textContent = v > 0 ? '+' + v : String(v);
+  });
   const sel = document.getElementById('eq-preset-sel');
-  sel.innerHTML = '<option value="">프리셋 선택…</option>' +
-    Object.keys(EQ_PRESETS).map(name => `<option value="${name}">${name}</option>`).join('');
+  if (sel) sel.value = eqLastPreset || '';
+  const onoffBtn = document.getElementById('eq-onoff');
+  onoffBtn.textContent = eqEnabled ? '켜짐' : '꺼짐';
+  onoffBtn.classList.toggle('on', eqEnabled);
 }
 
 // 밴드 하나의 게인 조절 (사용자가 슬라이더 직접 조작)
 function setBand(i, val) {
   val = parseFloat(val);
   eqBandValues[i] = val;
+  eqLastPreset = ''; // 수동 조절 시 프리셋 선택 해제
   if (eqFilters[i] && eqEnabled) eqFilters[i].gain.value = val;
   const valEl = document.getElementById('eq-val-' + i);
   if (valEl) valEl.textContent = val > 0 ? '+' + val : String(val);
   document.getElementById('eq-preset-sel').value = '';
+  saveEqSettings();
 }
 
 // 프리셋 적용 → 각 밴드 슬라이더/게인 값 일괄 반영
@@ -1318,6 +1357,7 @@ function applyPreset(name) {
   const gains = EQ_PRESETS[name];
   if (!gains) return;
   ensureAudioGraph();
+  eqLastPreset = name;
   gains.forEach((v, i) => {
     eqBandValues[i] = v;
     if (eqFilters[i] && eqEnabled) eqFilters[i].gain.value = v;
@@ -1327,12 +1367,15 @@ function applyPreset(name) {
     if (valEl) valEl.textContent = v > 0 ? '+' + v : String(v);
   });
   showAct(`이퀄라이저: ${name}`);
+  saveEqSettings();
 }
 
 // 전체 초기화 (플랫)
 function resetEq() {
   applyPreset('플랫');
+  eqLastPreset = '';
   document.getElementById('eq-preset-sel').value = '';
+  saveEqSettings();
 }
 
 // 이퀄라이저 켬/끔 (끄면 모든 밴드 게인을 0으로 → 사실상 원음 통과, 슬라이더 값은 보존)
@@ -1344,6 +1387,7 @@ function toggleEqEnabled() {
   btn.textContent = eqEnabled ? '켜짐' : '꺼짐';
   btn.classList.toggle('on', eqEnabled);
   showAct(eqEnabled ? '이퀄라이저 켜짐' : '이퀄라이저 꺼짐');
+  saveEqSettings();
 }
 
 function toggleEqPanel(e) {

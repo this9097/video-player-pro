@@ -3,8 +3,8 @@
 // ── 자동 업데이트: 이 파일(sw.js) 내용이 바뀌면 브라우저가 새 버전을 감지 →
 //    설치 후 즉시 활성화(skipWaiting) → 페이지 쪽에 "업데이트됨" 메시지 전달
 //    (실제 새로고침 타이밍은 index.html에서 재생 중이 아닐 때로 제어)
-const CACHE = 'video-player-pro-v6';
-const CORE = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'video-player-pro-v7';
+const CORE = ['./index.html', './manifest.json', './icon-192.png', './icon-256.png', './icon-512.png', './icon-512-maskable.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
