@@ -1,7 +1,7 @@
 {
   "name": "Video Player Pro",
   "short_name": "VPlayer Pro",
-  "description": "재생 + 자르기 통합 비디오 플레이어 (재인코딩 없음) · 심상현",
+  "description": "재생 + 자르기 통합 비디오/오디오(MP3) 플레이어 · 재생목록 · 이퀄라이저 (재인코딩 없음) · 심상현",
   "id": "/index.html",
   "start_url": "./index.html",
   "scope": "./",
@@ -28,6 +28,13 @@
         "video/x-ms-wmv": [".wmv"],
         "video/x-flv": [".flv"],
         "video/mp2t": [".ts", ".m2ts", ".mts"],
+        "audio/mpeg": [".mp3"],
+        "audio/mp4": [".m4a"],
+        "audio/wav": [".wav"],
+        "audio/flac": [".flac"],
+        "audio/ogg": [".ogg", ".oga"],
+        "audio/aac": [".aac"],
+        "audio/x-ms-wma": [".wma"],
         "application/x-subrip": [".srt"],
         "text/vtt": [".vtt"]
       },
