@@ -1607,7 +1607,7 @@ document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) menubar.classList.remove('hidden');
 });
 
-// ── 화면 최소화 + 음소거 ──
+// ── 화면 최소화 + 음소거 (기존 방식, 다른 곳에서 필요하면 사용) ──
 function hideScreen() {
   isHidden = true;
   video.muted = true;     // 소리 끔
@@ -1622,6 +1622,25 @@ function restoreScreen() {
   updVol();
   appEl.classList.remove('screen-hidden');
   screenR.classList.remove('show');
+}
+
+// ── 진짜 최소화(작업표시줄) 대신 브라우저 PIP(그림 속 그림) ──
+// 브라우저 보안 정책상 JS로 창을 작업표시줄에 직접 최소화시키는 것은 불가능합니다.
+// 가장 가까운 대안은 시스템 PIP(그림 속 그림) 창으로, 브라우저/앱 창을 최소화해도
+// 화면 위에 작은 영상 창이 계속 떠 있습니다.
+async function minimizeToPiP() {
+  if (!video.src || !video.videoWidth) return;
+  try {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else {
+      await video.requestPictureInPicture();
+    }
+  } catch (err) {
+    // PIP를 지원하지 않는 환경(일부 PWA 독립 실행 창 등)이면 기존 화면숨김으로 대체
+    console.warn('PIP 미지원, 화면숨김으로 대체:', err);
+    hideScreen();
+  }
 }
 
 // ── 캡처 ──
@@ -1716,7 +1735,7 @@ document.addEventListener('keydown', e => {
     case 'Escape':
       e.preventDefault();
       if (document.fullscreenElement) document.exitFullscreen();
-      else hideScreen(); // 최소화 + 음소거
+      else minimizeToPiP(); // 진짜 브라우저 그림 속 그림(PIP)으로 최소화
       break;
 
     case 'ArrowLeft':
