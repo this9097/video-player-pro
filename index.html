@@ -1735,7 +1735,7 @@ document.addEventListener('keydown', e => {
     case 'Escape':
       e.preventDefault();
       if (document.fullscreenElement) document.exitFullscreen();
-      else minimizeToPiP(); // 진짜 브라우저 그림 속 그림(PIP)으로 최소화
+      // 전체화면이 아닐 때는 아무 동작도 하지 않음 (화면숨김/PIP 모두 비활성화)
       break;
 
     case 'ArrowLeft':
