@@ -1226,8 +1226,8 @@ async function loadFile(file, subFile) {
   const originalFile = file;
   let playFile = file;
 
-  // 브라우저가 사실상 재생 못 하는 컨테이너는 미리 MP4로 변환
-  const ALWAYS_TRANSCODE = /\.(wmv|rm|rmvb|asf|divx)$/i;
+  // 브라우저가 사실상 재생 못 하는 컨테이너는 미리 MP4로 변환 (AVI는 컨테이너 자체를 브라우저가 지원 안 함)
+  const ALWAYS_TRANSCODE = /\.(wmv|rm|rmvb|asf|divx|avi)$/i;
   if (!audio && ALWAYS_TRANSCODE.test(file.name) && !transcodedCache.has(file)) {
     const converted = await transcodeToMp4(file);
     if (converted) { playFile = converted; transcodedCache.add(file); }
