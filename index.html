@@ -1044,23 +1044,41 @@ async function getFFmpeg() {
   if (ffmpegLoading) return ffmpegLoading;
   ffmpegLoading = (async () => {
     showTranscodeOverlay('변환 엔진 불러오는 중… (최초 1회만, 다소 시간이 걸릴 수 있습니다)');
-    const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
-    const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
-    const ff = new FFmpeg();
-    ff.on('progress', ({ progress }) => {
-      updateTranscodeProgress(Math.round((progress || 0) * 100), '변환 중…');
-    });
-    ff.on('log', ({ message }) => {
-      ffmpegLogTail.push(message);
-      if (ffmpegLogTail.length > 60) ffmpegLogTail.shift();
-    });
-    const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
-    await ff.load({
-      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-    });
-    ffmpegInstance = ff;
-    return ff;
+    try {
+      const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+      const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+      const ff = new FFmpeg();
+      ff.on('progress', ({ progress }) => {
+        updateTranscodeProgress(Math.round((progress || 0) * 100), '변환 중…');
+      });
+      ff.on('log', ({ message }) => {
+        ffmpegLogTail.push(message);
+        if (ffmpegLogTail.length > 60) ffmpegLogTail.shift();
+      });
+      const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+
+      const withTimeout = (p, ms, label) => Promise.race([
+        p,
+        new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 시간 초과(30초) — 네트워크 상태를 확인해 주세요.')), ms))
+      ]);
+
+      const [coreURL, wasmURL] = await withTimeout(
+        Promise.all([
+          toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+          toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+        ]),
+        30000, '변환 엔진 파일 다운로드'
+      );
+      await withTimeout(ff.load({ coreURL, wasmURL }), 30000, '변환 엔진 초기화');
+      ffmpegInstance = ff;
+      return ff;
+    } catch (err) {
+      ffmpegLoading = null; // 실패 시 다음 시도에서 다시 로드하도록 초기화
+      hideTranscodeOverlay();
+      console.error('변환 엔진 로딩 실패:', err);
+      showAct('변환 엔진을 불러오지 못했습니다: ' + (err?.message || err));
+      throw err;
+    }
   })();
   return ffmpegLoading;
 }
@@ -1080,7 +1098,12 @@ async function runTranscodeAttempt(ff, inName, outName, file, cmdArgs) {
 // 손상되었거나 인덱스가 이상한 파일이 많은 구형 AVI 대비, 관대한 옵션으로 먼저 시도하고
 // 실패하면 오디오를 포기하고 영상만이라도 살리는 방식으로 한 번 더 시도함.
 async function transcodeToMp4(file) {
-  const ff = await getFFmpeg();
+  let ff;
+  try {
+    ff = await getFFmpeg();
+  } catch (err) {
+    return null; // getFFmpeg 내부에서 이미 안내 메시지 표시함
+  }
   showTranscodeOverlay(`"${file.name}" 변환 중… (파일이 클수록 오래 걸립니다)`);
   updateTranscodeProgress(0);
   const { fetchFile } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
