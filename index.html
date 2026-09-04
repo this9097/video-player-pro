@@ -1037,6 +1037,8 @@ function hideTranscodeOverlay() {
   transcodeOverlay.classList.remove('show');
 }
 
+let ffmpegLogTail = [];
+
 async function getFFmpeg() {
   if (ffmpegInstance) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
@@ -1047,6 +1049,10 @@ async function getFFmpeg() {
     const ff = new FFmpeg();
     ff.on('progress', ({ progress }) => {
       updateTranscodeProgress(Math.round((progress || 0) * 100), '변환 중…');
+    });
+    ff.on('log', ({ message }) => {
+      ffmpegLogTail.push(message);
+      if (ffmpegLogTail.length > 60) ffmpegLogTail.shift();
     });
     const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
     await ff.load({
@@ -1059,28 +1065,68 @@ async function getFFmpeg() {
   return ffmpegLoading;
 }
 
-// file(WMV 등)을 브라우저 재생 가능한 MP4(H.264/AAC)로 변환. 실패 시 null 반환.
+// 실제 변환 1회 시도. cmdArgs를 받아 실행하고, 성공하면 결과 File을 반환.
+async function runTranscodeAttempt(ff, inName, outName, file, cmdArgs) {
+  ffmpegLogTail = [];
+  await ff.exec(cmdArgs);
+  const data = await ff.readFile(outName);
+  if (!data || !data.buffer || data.buffer.byteLength < 1000) {
+    throw new Error('출력 파일이 비정상적으로 작음(변환 실패로 간주)');
+  }
+  return new File([data.buffer], file.name.replace(/\.[a-z0-9]+$/i, '') + '_변환.mp4', { type: 'video/mp4' });
+}
+
+// file(WMV, AVI 등)을 브라우저 재생 가능한 MP4(H.264/AAC)로 변환. 실패 시 null 반환.
+// 손상되었거나 인덱스가 이상한 파일이 많은 구형 AVI 대비, 관대한 옵션으로 먼저 시도하고
+// 실패하면 오디오를 포기하고 영상만이라도 살리는 방식으로 한 번 더 시도함.
 async function transcodeToMp4(file) {
+  const ff = await getFFmpeg();
+  showTranscodeOverlay(`"${file.name}" 변환 중… (파일이 클수록 오래 걸립니다)`);
+  updateTranscodeProgress(0);
+  const { fetchFile } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+  const inName = 'in' + (file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.bin');
+  const outName = 'out.mp4';
+
   try {
-    const ff = await getFFmpeg();
-    showTranscodeOverlay(`"${file.name}" 변환 중… (파일이 클수록 오래 걸립니다)`);
-    updateTranscodeProgress(0);
-    const { fetchFile } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
-    const inName = 'in' + (file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.bin');
-    const outName = 'out.mp4';
     await ff.writeFile(inName, await fetchFile(file));
-    await ff.exec(['-i', inName, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '160k', outName]);
-    const data = await ff.readFile(outName);
-    ff.deleteFile(inName).catch(() => {});
-    ff.deleteFile(outName).catch(() => {});
-    hideTranscodeOverlay();
-    return new File([data.buffer], file.name.replace(/\.[a-z0-9]+$/i, '') + '_변환.mp4', { type: 'video/mp4' });
   } catch (err) {
     hideTranscodeOverlay();
-    console.error('변환 실패:', err);
-    showAct('변환 실패: ' + (err?.message || err));
+    console.error('파일 로드 실패:', err);
+    showAct('변환 실패(파일을 읽지 못함): ' + (err?.message || err));
     return null;
   }
+
+  const inputRobustFlags = ['-fflags', '+genpts+igndts', '-err_detect', 'ignore_err', '-analyzeduration', '200M', '-probesize', '200M'];
+
+  const attempts = [
+    // 1차: 영상+음성 모두 재인코딩 (일반적인 경우)
+    [...inputRobustFlags, '-i', inName, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', outName],
+    // 2차: 오디오 트랙이 문제인 경우를 대비해 음성 없이 영상만 변환
+    [...inputRobustFlags, '-i', inName, '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outName],
+  ];
+
+  let lastErr = null;
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      updateTranscodeProgress(0, i === 0 ? '변환 중…' : '음성 없이 영상만 변환 재시도 중…');
+      const result = await runTranscodeAttempt(ff, inName, outName, file, attempts[i]);
+      ff.deleteFile(inName).catch(() => {});
+      ff.deleteFile(outName).catch(() => {});
+      hideTranscodeOverlay();
+      if (i === 1) showAct('음성 트랙 변환에 실패해 영상만 재생됩니다.');
+      return result;
+    } catch (err) {
+      lastErr = err;
+      ff.deleteFile(outName).catch(() => {});
+    }
+  }
+
+  hideTranscodeOverlay();
+  ff.deleteFile(inName).catch(() => {});
+  const logSnippet = ffmpegLogTail.slice(-6).join(' / ');
+  console.error('변환 실패:', lastErr, '\nffmpeg log:', ffmpegLogTail.join('\n'));
+  showAct('변환 실패: ' + (logSnippet || lastErr?.message || lastErr));
+  return null;
 }
 
 // 재생 시작이 아예 안 되거나(에러), 소리만 나오고 화면이 안 그려지는 경우 자동 감지 → 변환 재시도
