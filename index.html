@@ -49,6 +49,11 @@ html,body {
 #transcode-bar-wrap { width:260px; height:6px; border-radius:3px; background:rgba(255,255,255,0.1); overflow:hidden; }
 #transcode-bar { height:100%; width:0%; background:var(--accent); transition:width .2s; }
 #transcode-msg { color:var(--muted); font-size:12px; }
+#transcode-cancel {
+  margin-top:6px; background:transparent; color:var(--muted); border:1px solid var(--border);
+  border-radius:6px; padding:5px 14px; font-size:12px; cursor:pointer;
+}
+#transcode-cancel:hover { color:var(--text); border-color:var(--muted); }
 
 /* ── 변환 실패 안내(사라지지 않고 확인 눌러야 닫힘) ── */
 #transcode-error-overlay {
@@ -608,6 +613,7 @@ html,body {
   <div id="transcode-spinner"></div>
   <div id="transcode-msg">영상 변환 준비 중…</div>
   <div id="transcode-bar-wrap"><div id="transcode-bar"></div></div>
+  <button id="transcode-cancel" onclick="cancelTranscodeUI()">취소</button>
 </div>
 
 <div id="transcode-error-overlay">
@@ -1070,8 +1076,37 @@ function showTranscodeError(msg) {
 function hideTranscodeError() {
   document.getElementById('transcode-error-overlay').classList.remove('show');
 }
+// 로딩이 너무 오래 걸릴 때 사용자가 직접 중단할 수 있는 취소 버튼
+function cancelTranscodeUI() {
+  hideTranscodeOverlay();
+  ffmpegLoading = null; // 다음에 다시 시도할 수 있도록 초기화 (진행 중이던 fetch는 백그라운드에서 계속되다 무시됨)
+  showAct('변환을 취소했습니다.');
+}
 
 let ffmpegLogTail = [];
+
+// content-length 기반 실제 다운로드 진행률을 보여주며 파일을 받아 blob URL로 반환
+async function fetchToBlobURLWithProgress(url, mime, onProgress, label) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${label} 다운로드 실패 (HTTP ${res.status})`);
+  const total = Number(res.headers.get('content-length')) || 0;
+  if (!res.body || !total) {
+    // 스트리밍/용량 정보를 못 얻으면 그냥 통째로 받음
+    const buf = await res.arrayBuffer();
+    return URL.createObjectURL(new Blob([buf], { type: mime }));
+  }
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(received / total, label);
+  }
+  return URL.createObjectURL(new Blob(chunks, { type: mime }));
+}
 
 async function getFFmpeg() {
   if (ffmpegInstance) return ffmpegInstance;
@@ -1080,7 +1115,6 @@ async function getFFmpeg() {
     showTranscodeOverlay('변환 엔진 불러오는 중… (최초 1회만, 다소 시간이 걸릴 수 있습니다)');
     try {
       const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
-      const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
       const ff = new FFmpeg();
       ff.on('progress', ({ progress }) => {
         updateTranscodeProgress(Math.round((progress || 0) * 100), '변환 중…');
@@ -1094,19 +1128,28 @@ async function getFFmpeg() {
 
       const withTimeout = (p, ms, label) => Promise.race([
         p,
-        new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 시간 초과(30초) — 네트워크 상태를 확인해 주세요.')), ms))
+        new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 시간 초과 — 네트워크 상태를 확인해 주세요.')), ms))
       ]);
+
+      const dlProgress = {}; // 파일별 개별 진행률(0~1)
+      const reportDl = (frac, label) => {
+        dlProgress[label] = frac;
+        const vals = Object.values(dlProgress);
+        const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+        updateTranscodeProgress(Math.round(avg * 100), `변환 엔진 다운로드 중… (${Math.round(avg * 100)}%)`);
+      };
 
       // Worker는 브라우저 보안 정책상 CDN 등 다른 origin 스크립트로 직접 못 만들기 때문에
       // worker.js도 blob URL로 바꿔서 전달해야 함 (classWorkerURL)
       const [coreURL, wasmURL, classWorkerURL] = await withTimeout(
         Promise.all([
-          toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
-          toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-          toBlobURL(`${ffmpegBase}/worker.js`, 'text/javascript'),
+          fetchToBlobURLWithProgress(`${base}/ffmpeg-core.js`, 'text/javascript', reportDl, 'core.js'),
+          fetchToBlobURLWithProgress(`${base}/ffmpeg-core.wasm`, 'application/wasm', reportDl, 'core.wasm'),
+          fetchToBlobURLWithProgress(`${ffmpegBase}/worker.js`, 'text/javascript', reportDl, 'worker.js'),
         ]),
-        30000, '변환 엔진 파일 다운로드'
+        90000, '변환 엔진 파일 다운로드'
       );
+      updateTranscodeProgress(100, '변환 엔진 초기화 중…');
       await withTimeout(ff.load({ coreURL, wasmURL, classWorkerURL }), 30000, '변환 엔진 초기화');
       ffmpegInstance = ff;
       return ff;
