@@ -50,6 +50,25 @@ html,body {
 #transcode-bar { height:100%; width:0%; background:var(--accent); transition:width .2s; }
 #transcode-msg { color:var(--muted); font-size:12px; }
 
+/* ── 변환 실패 안내(사라지지 않고 확인 눌러야 닫힘) ── */
+#transcode-error-overlay {
+  position:fixed; inset:0; z-index:10001;
+  background:rgba(0,0,0,0.75);
+  display:none; align-items:center; justify-content:center;
+}
+#transcode-error-overlay.show { display:flex; }
+#transcode-error-box {
+  max-width:520px; width:90%;
+  background:var(--surface); border:1px solid var(--border); border-radius:10px;
+  padding:22px 24px; user-select:text;
+}
+#transcode-error-title { color:#f87171; font-size:15px; font-weight:600; margin-bottom:10px; }
+#transcode-error-text { font-size:13px; line-height:1.6; color:var(--text); white-space:pre-wrap; word-break:break-all; margin-bottom:16px; max-height:280px; overflow-y:auto; }
+#transcode-error-close {
+  background:var(--accent); color:#1a1200; border:none; border-radius:6px;
+  padding:8px 18px; font-size:13px; font-weight:600; cursor:pointer;
+}
+
 /* ── 앱 ── */
 #app {
   display:flex; flex-direction:column;
@@ -591,6 +610,14 @@ html,body {
   <div id="transcode-bar-wrap"><div id="transcode-bar"></div></div>
 </div>
 
+<div id="transcode-error-overlay">
+  <div id="transcode-error-box">
+    <div id="transcode-error-title">⚠ 변환 실패</div>
+    <div id="transcode-error-text"></div>
+    <button id="transcode-error-close" onclick="hideTranscodeError()">확인</button>
+  </div>
+</div>
+
 <div id="app">
   <!-- 메뉴바 -->
   <div id="menubar">
@@ -1036,6 +1063,13 @@ function updateTranscodeProgress(pct, msg) {
 function hideTranscodeOverlay() {
   transcodeOverlay.classList.remove('show');
 }
+function showTranscodeError(msg) {
+  document.getElementById('transcode-error-text').textContent = msg;
+  document.getElementById('transcode-error-overlay').classList.add('show');
+}
+function hideTranscodeError() {
+  document.getElementById('transcode-error-overlay').classList.remove('show');
+}
 
 let ffmpegLogTail = [];
 
@@ -1076,7 +1110,7 @@ async function getFFmpeg() {
       ffmpegLoading = null; // 실패 시 다음 시도에서 다시 로드하도록 초기화
       hideTranscodeOverlay();
       console.error('변환 엔진 로딩 실패:', err);
-      showAct('변환 엔진을 불러오지 못했습니다: ' + (err?.message || err));
+      showTranscodeError('변환 엔진을 불러오지 못했습니다.\n\n' + (err?.message || err) + '\n\n인터넷 연결을 확인한 뒤 파일을 다시 열어봐 주세요.');
       throw err;
     }
   })();
@@ -1115,7 +1149,7 @@ async function transcodeToMp4(file) {
   } catch (err) {
     hideTranscodeOverlay();
     console.error('파일 로드 실패:', err);
-    showAct('변환 실패(파일을 읽지 못함): ' + (err?.message || err));
+    showTranscodeError('파일을 읽지 못했습니다.\n\n' + (err?.message || err));
     return null;
   }
 
@@ -1148,7 +1182,7 @@ async function transcodeToMp4(file) {
   ff.deleteFile(inName).catch(() => {});
   const logSnippet = ffmpegLogTail.slice(-6).join(' / ');
   console.error('변환 실패:', lastErr, '\nffmpeg log:', ffmpegLogTail.join('\n'));
-  showAct('변환 실패: ' + (logSnippet || lastErr?.message || lastErr));
+  showTranscodeError('이 파일은 자동 변환에 실패했습니다.\n\n원인: ' + (logSnippet || lastErr?.message || lastErr) + '\n\n파일이 손상되었거나 특수한 코덱일 수 있습니다.');
   return null;
 }
 
@@ -1299,7 +1333,15 @@ async function loadFile(file, subFile) {
   const ALWAYS_TRANSCODE = /\.(wmv|rm|rmvb|asf|divx|avi)$/i;
   if (!audio && ALWAYS_TRANSCODE.test(file.name) && !transcodedCache.has(file)) {
     const converted = await transcodeToMp4(file);
-    if (converted) { playFile = converted; transcodedCache.add(file); }
+    if (converted) {
+      playFile = converted;
+      transcodedCache.add(file);
+    } else {
+      // 변환 실패 — 원본 파일은 애초에 브라우저가 못 열므로 재생 시도 자체를 하지 않음
+      dropzone.classList.remove('hidden');
+      titleBar.textContent = '';
+      return;
+    }
   }
 
   currentVideoFile = playFile;
