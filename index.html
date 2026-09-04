@@ -972,8 +972,8 @@ html,body {
   </div>
 </div>
 
-<input type="file" id="fi" accept="video/*,audio/*,.mkv,.ts,.avi,.flv,.wmv,.mp3,.m4a,.wav,.flac,.ogg,.aac,.wma,.srt,.vtt" multiple onchange="handleFileInput(this.files)">
-<input type="file" id="fi-add" accept="video/*,audio/*,.mkv,.ts,.avi,.flv,.wmv,.mp3,.m4a,.wav,.flac,.ogg,.aac,.wma,.srt,.vtt" multiple onchange="handleAddFiles(this.files)">
+<input type="file" id="fi" accept="video/*,audio/*,.mkv,.ts,.avi,.flv,.wmv,.mpg,.mpeg,.3gp,.3g2,.vob,.ogv,.asf,.rm,.rmvb,.divx,.f4v,.mxf,.mp3,.m4a,.wav,.flac,.ogg,.aac,.wma,.srt,.vtt" multiple onchange="handleFileInput(this.files)">
+<input type="file" id="fi-add" accept="video/*,audio/*,.mkv,.ts,.avi,.flv,.wmv,.mpg,.mpeg,.3gp,.3g2,.vob,.ogv,.asf,.rm,.rmvb,.divx,.f4v,.mxf,.mp3,.m4a,.wav,.flac,.ogg,.aac,.wma,.srt,.vtt" multiple onchange="handleAddFiles(this.files)">
 <input type="file" id="si" accept=".srt,.vtt" onchange="loadSubFile(this.files[0])">
 <input type="file" id="fi-dir" webkitdirectory style="display:none" onchange="handleDirFiles(this.files)">
 
@@ -1009,7 +1009,7 @@ let subColor = '#ffffff';
 const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
 // ── 재생목록 / 오디오(mp3 등) 지원 ──
-const VIDEO_EXT = /\.(mp4|mkv|avi|mov|webm|ts|flv|wmv|m4v|m2ts|mts)$/i;
+const VIDEO_EXT = /\.(mp4|mkv|avi|mov|webm|ts|flv|wmv|m4v|m2ts|mts|mpg|mpeg|3gp|3g2|vob|ogv|asf|rm|rmvb|divx|f4v|mxf)$/i;
 const AUDIO_EXT = /\.(mp3|m4a|wav|flac|ogg|oga|aac|wma)$/i;
 const MEDIA_EXT = new RegExp(VIDEO_EXT.source + '|' + AUDIO_EXT.source, 'i');
 
@@ -1083,27 +1083,36 @@ async function transcodeToMp4(file) {
   }
 }
 
-// 재생은 시작됐는데 영상 트랙이 안 그려지는(소리만 나오는) 경우 자동 감지 → 변환 재시도
+// 재생 시작이 아예 안 되거나(에러), 소리만 나오고 화면이 안 그려지는 경우 자동 감지 → 변환 재시도
 function checkVideoRendered(originalFile) {
-  const check = () => {
-    video.removeEventListener('loadeddata', check);
-    setTimeout(async () => {
-      if (currentVideoFile !== originalFile && !transcodedCache.has(originalFile)) return;
-      if (video.videoWidth === 0 && video.videoHeight === 0 && !transcodedCache.has(originalFile)) {
-        showAct('영상이 안 보여 자동 변환을 시도합니다…');
-        const converted = await transcodeToMp4(originalFile);
-        if (converted) {
-          transcodedCache.add(originalFile);
-          video.pause();
-          if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
-          currentVideoFile = converted;
-          video.src = URL.createObjectURL(converted);
-          video.load(); video.play();
-        }
-      }
+  let settled = false;
+
+  const tryConvert = async (reason) => {
+    if (settled || transcodedCache.has(originalFile)) return;
+    settled = true;
+    video.removeEventListener('loadeddata', onLoadedData);
+    video.removeEventListener('error', onError);
+    showAct(reason === 'error' ? '재생할 수 없는 형식이라 자동 변환을 시도합니다…' : '영상이 안 보여 자동 변환을 시도합니다…');
+    const converted = await transcodeToMp4(originalFile);
+    if (converted) {
+      transcodedCache.add(originalFile);
+      video.pause();
+      if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+      currentVideoFile = converted;
+      video.src = URL.createObjectURL(converted);
+      video.load(); video.play();
+    }
+  };
+
+  const onLoadedData = () => {
+    setTimeout(() => {
+      if (!settled && video.videoWidth === 0 && video.videoHeight === 0) tryConvert('blank');
     }, 700);
   };
-  video.addEventListener('loadeddata', check);
+  const onError = () => tryConvert('error');
+
+  video.addEventListener('loadeddata', onLoadedData);
+  video.addEventListener('error', onError);
 }
 const SUB_EXT   = /\.(srt|vtt)$/i;
 
@@ -1217,8 +1226,9 @@ async function loadFile(file, subFile) {
   const originalFile = file;
   let playFile = file;
 
-  // WMV는 브라우저가 아예 재생 못 하므로 미리 MP4로 변환
-  if (!audio && /\.wmv$/i.test(file.name) && !transcodedCache.has(file)) {
+  // 브라우저가 사실상 재생 못 하는 컨테이너는 미리 MP4로 변환
+  const ALWAYS_TRANSCODE = /\.(wmv|rm|rmvb|asf|divx)$/i;
+  if (!audio && ALWAYS_TRANSCODE.test(file.name) && !transcodedCache.has(file)) {
     const converted = await transcodeToMp4(file);
     if (converted) { playFile = converted; transcodedCache.add(file); }
   }
