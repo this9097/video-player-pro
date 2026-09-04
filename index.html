@@ -32,6 +32,24 @@ html,body {
 #screen-restore.show { display:flex; }
 #restore-hint { font-size:12px; color:#333; letter-spacing:.5px; }
 
+/* ── WMV/코덱 변환 오버레이 ── */
+#transcode-overlay {
+  position:fixed; inset:0; z-index:10000;
+  background:rgba(11,11,14,0.95);
+  display:none; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+  color:var(--text); font-size:14px;
+}
+#transcode-overlay.show { display:flex; }
+#transcode-spinner {
+  width:36px; height:36px; border-radius:50%;
+  border:3px solid rgba(245,158,11,0.25); border-top-color:var(--accent);
+  animation:tc-spin 0.9s linear infinite;
+}
+@keyframes tc-spin { to { transform:rotate(360deg); } }
+#transcode-bar-wrap { width:260px; height:6px; border-radius:3px; background:rgba(255,255,255,0.1); overflow:hidden; }
+#transcode-bar { height:100%; width:0%; background:var(--accent); transition:width .2s; }
+#transcode-msg { color:var(--muted); font-size:12px; }
+
 /* ── 앱 ── */
 #app {
   display:flex; flex-direction:column;
@@ -567,6 +585,12 @@ html,body {
   <div id="restore-hint">ESC 키 또는 클릭하면 복원됩니다</div>
 </div>
 
+<div id="transcode-overlay">
+  <div id="transcode-spinner"></div>
+  <div id="transcode-msg">영상 변환 준비 중…</div>
+  <div id="transcode-bar-wrap"><div id="transcode-bar"></div></div>
+</div>
+
 <div id="app">
   <!-- 메뉴바 -->
   <div id="menubar">
@@ -988,6 +1012,99 @@ const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 const VIDEO_EXT = /\.(mp4|mkv|avi|mov|webm|ts|flv|wmv|m4v|m2ts|mts)$/i;
 const AUDIO_EXT = /\.(mp3|m4a|wav|flac|ogg|oga|aac|wma)$/i;
 const MEDIA_EXT = new RegExp(VIDEO_EXT.source + '|' + AUDIO_EXT.source, 'i');
+
+// ── WMV 등 브라우저 미지원 코덱 자동 변환 (ffmpeg.wasm) ──
+// 브라우저는 WMV(Windows Media)를 <video> 태그로 재생할 수 없고, MP4 안에 있어도
+// H.265 등 일부 코덱은 소리만 나오고 화면이 안 나올 수 있음. 그런 경우 자동으로
+// MP4(H.264/AAC)로 변환해서 재생함. 최초 변환 시 변환 엔진(수십 MB)을 내려받으므로
+// 시간이 걸릴 수 있음.
+let ffmpegInstance = null, ffmpegLoading = null;
+const transcodedCache = new WeakSet(); // 이미 변환 시도한 File(무한 재시도 방지)
+const transcodeOverlay = document.getElementById('transcode-overlay');
+const transcodeMsg = document.getElementById('transcode-msg');
+const transcodeBar = document.getElementById('transcode-bar');
+
+function showTranscodeOverlay(msg) {
+  transcodeMsg.textContent = msg;
+  transcodeBar.style.width = '0%';
+  transcodeOverlay.classList.add('show');
+}
+function updateTranscodeProgress(pct, msg) {
+  transcodeBar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  if (msg) transcodeMsg.textContent = msg;
+}
+function hideTranscodeOverlay() {
+  transcodeOverlay.classList.remove('show');
+}
+
+async function getFFmpeg() {
+  if (ffmpegInstance) return ffmpegInstance;
+  if (ffmpegLoading) return ffmpegLoading;
+  ffmpegLoading = (async () => {
+    showTranscodeOverlay('변환 엔진 불러오는 중… (최초 1회만, 다소 시간이 걸릴 수 있습니다)');
+    const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js');
+    const { toBlobURL } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+    const ff = new FFmpeg();
+    ff.on('progress', ({ progress }) => {
+      updateTranscodeProgress(Math.round((progress || 0) * 100), '변환 중…');
+    });
+    const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+    await ff.load({
+      coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    ffmpegInstance = ff;
+    return ff;
+  })();
+  return ffmpegLoading;
+}
+
+// file(WMV 등)을 브라우저 재생 가능한 MP4(H.264/AAC)로 변환. 실패 시 null 반환.
+async function transcodeToMp4(file) {
+  try {
+    const ff = await getFFmpeg();
+    showTranscodeOverlay(`"${file.name}" 변환 중… (파일이 클수록 오래 걸립니다)`);
+    updateTranscodeProgress(0);
+    const { fetchFile } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js');
+    const inName = 'in' + (file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.bin');
+    const outName = 'out.mp4';
+    await ff.writeFile(inName, await fetchFile(file));
+    await ff.exec(['-i', inName, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', '-b:a', '160k', outName]);
+    const data = await ff.readFile(outName);
+    ff.deleteFile(inName).catch(() => {});
+    ff.deleteFile(outName).catch(() => {});
+    hideTranscodeOverlay();
+    return new File([data.buffer], file.name.replace(/\.[a-z0-9]+$/i, '') + '_변환.mp4', { type: 'video/mp4' });
+  } catch (err) {
+    hideTranscodeOverlay();
+    console.error('변환 실패:', err);
+    showAct('변환 실패: ' + (err?.message || err));
+    return null;
+  }
+}
+
+// 재생은 시작됐는데 영상 트랙이 안 그려지는(소리만 나오는) 경우 자동 감지 → 변환 재시도
+function checkVideoRendered(originalFile) {
+  const check = () => {
+    video.removeEventListener('loadeddata', check);
+    setTimeout(async () => {
+      if (currentVideoFile !== originalFile && !transcodedCache.has(originalFile)) return;
+      if (video.videoWidth === 0 && video.videoHeight === 0 && !transcodedCache.has(originalFile)) {
+        showAct('영상이 안 보여 자동 변환을 시도합니다…');
+        const converted = await transcodeToMp4(originalFile);
+        if (converted) {
+          transcodedCache.add(originalFile);
+          video.pause();
+          if (video.src && video.src.startsWith('blob:')) URL.revokeObjectURL(video.src);
+          currentVideoFile = converted;
+          video.src = URL.createObjectURL(converted);
+          video.load(); video.play();
+        }
+      }
+    }, 700);
+  };
+  video.addEventListener('loadeddata', check);
+}
 const SUB_EXT   = /\.(srt|vtt)$/i;
 
 let playlist = [];   // { file, name, sub, isAudio }
@@ -1088,15 +1205,26 @@ function addMediaFiles(fileArr, opts) {
   if (curIndex === -1) playAt(startIdx);
 }
 
-function loadFile(file, subFile) {
+async function loadFile(file, subFile) {
   if (!file) return;
   // 기존 재생 완전히 중단 + 이전 blob URL 해제 (메모리 누수 방지)
   video.pause();
   if (video.src && video.src.startsWith('blob:')) {
     URL.revokeObjectURL(video.src);
   }
-  currentVideoFile = file;
-  video.src = URL.createObjectURL(file);
+
+  const audio = AUDIO_EXT.test(file.name);
+  const originalFile = file;
+  let playFile = file;
+
+  // WMV는 브라우저가 아예 재생 못 하므로 미리 MP4로 변환
+  if (!audio && /\.wmv$/i.test(file.name) && !transcodedCache.has(file)) {
+    const converted = await transcodeToMp4(file);
+    if (converted) { playFile = converted; transcodedCache.add(file); }
+  }
+
+  currentVideoFile = playFile;
+  video.src = URL.createObjectURL(playFile);
   video.load(); video.play();
   dropzone.classList.add('hidden');
   titleBar.textContent = file.name;
@@ -1108,9 +1236,11 @@ function loadFile(file, subFile) {
   if (subFile) setTimeout(() => loadSubFile(subFile), 300);
 
   // 오디오(mp3 등) 전용 재생 화면 전환
-  const audio = AUDIO_EXT.test(file.name);
   vw.classList.toggle('audio-mode', audio);
   if (audio) document.getElementById('ac-name').textContent = file.name;
+
+  // 영상 파일인데 화면(영상 트랙)이 안 그려지고 소리만 나오는 코덱 문제 자동 감지
+  if (!audio) checkVideoRendered(originalFile);
 }
 
 // ── 재생목록 ──
