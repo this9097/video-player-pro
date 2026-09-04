@@ -1923,9 +1923,10 @@ document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement) menubar.classList.remove('hidden');
 });
 
-// ── 화면 최소화 + 음소거 (기존 방식, 다른 곳에서 필요하면 사용) ──
+// ── 화면 정지 + 가리기(숨김) + 음소거 ──
 function hideScreen() {
   isHidden = true;
+  video.pause();          // 재생 멈춤
   video.muted = true;     // 소리 끔
   updVol();
   appEl.classList.add('screen-hidden');
@@ -1938,6 +1939,7 @@ function restoreScreen() {
   updVol();
   appEl.classList.remove('screen-hidden');
   screenR.classList.remove('show');
+  video.play();           // 재생 재개
 }
 
 // ── 진짜 최소화(작업표시줄) 대신 브라우저 PIP(그림 속 그림) ──
@@ -2051,7 +2053,7 @@ document.addEventListener('keydown', e => {
     case 'Escape':
       e.preventDefault();
       if (document.fullscreenElement) document.exitFullscreen();
-      // 전체화면이 아닐 때는 아무 동작도 하지 않음 (화면숨김/PIP 모두 비활성화)
+      else hideScreen(); // 화면 정지 + 가리기 + 음소거
       break;
 
     case 'ArrowLeft':
